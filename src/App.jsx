@@ -122,15 +122,23 @@ export default function App() {
 
   useEffect(() => { initApp(); }, []);
 
- async function initApp() {
+async function initApp() {
   setLoading(true);
   const today = getTodayKey();
   let q = await getTodayQuestion(today);
+  console.log("DB question:", q);
   if (!q) {
+    console.log("No DB question, generating...");
     q = await fetchAIQuestion();
-    if (!q) q = FALLBACK_QUESTIONS[Math.floor(Math.random() * FALLBACK_QUESTIONS.length)];
+    console.log("AI question:", q);
+    if (!q) {
+      console.log("AI failed, using fallback");
+      q = FALLBACK_QUESTIONS[0];
+    }
     await saveTodayQuestion(today, q);
-    q = await getTodayQuestion(today); // always read back from DB as source of truth
+    console.log("Saved, reading back...");
+    q = await getTodayQuestion(today);
+    console.log("Read back:", q);
   }
   setQuestion(q);
   const todayVotes = await getTodayVotes(today);
