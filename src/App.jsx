@@ -29,7 +29,9 @@ function avatarColor(name) {
 }
 
 async function sbFetch(path, opts = {}) {
-  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+  const url = `${SUPABASE_URL}/rest/v1/${path}`;
+  console.log("Fetching:", url);
+  const res = await fetch(url, {
     ...opts,
     headers: {
       "apikey": SUPABASE_KEY,
@@ -44,11 +46,15 @@ async function sbFetch(path, opts = {}) {
   return text ? JSON.parse(text) : [];
 }
 
-async function getTodayQuestion(today) {
+aasync function getTodayQuestion(today) {
   try {
     const rows = await sbFetch(`daily_question?date=eq.${today}&limit=1`);
-    if (rows.length > 0) return { topic: rows[0].topic, q: rows[0].question, a: rows[0].option_a, b: rows[0].option_b };
-  } catch {}
+    console.log("Raw DB rows:", rows);
+    if (rows.length > 0) {
+      const r = rows[0];
+      return { topic: r.topic, q: r.question, a: r.option_a, b: r.option_b };
+    }
+  } catch(e) { console.log("getTodayQuestion error:", e); }
   return null;
 }
 
