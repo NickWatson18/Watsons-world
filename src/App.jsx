@@ -56,7 +56,8 @@ async function saveTodayQuestion(today, q) {
   try {
     await sbFetch("daily_question", {
       method: "POST",
-      prefer: "return=minimal",
+      prefer: "resolution=ignore-duplicates,return=minimal",
+      headers: { "Prefer": "resolution=ignore-duplicates,return=minimal" },
       body: JSON.stringify({ date: today, topic: q.topic, question: q.q, option_a: q.a, option_b: q.b })
     });
   } catch {}
@@ -121,24 +122,21 @@ export default function App() {
 
   useEffect(() => { initApp(); }, []);
 
-  async function initApp() {
-    setLoading(true);
-    const today = getTodayKey();
-
-    // Load votes from Supabase
-    const todayVotes = await getTodayVotes(today);
-    setVotes(todayVotes);
-
-    // Load or generate today's shared question
-    let q = await getTodayQuestion(today);
-    if (!q) {
-      q = await fetchAIQuestion();
-      if (!q) q = FALLBACK_QUESTIONS[Math.floor(Math.random() * FALLBACK_QUESTIONS.length)];
-      await saveTodayQuestion(today, q);
-    }
-    setQuestion(q);
-    setLoading(false);
+ async function initApp() {
+  setLoading(true);
+  const today = getTodayKey();
+  let q = await getTodayQuestion(today);
+  if (!q) {
+    q = await fetchAIQuestion();
+    if (!q) q = FALLBACK_QUESTIONS[Math.floor(Math.random() * FALLBACK_QUESTIONS.length)];
+    await saveTodayQuestion(today, q);
+    q = await getTodayQuestion(today); // always read back from DB as source of truth
   }
+  setQuestion(q);
+  const todayVotes = await getTodayVotes(today);
+  setVotes(todayVotes);
+  setLoading(false);
+}
 
   function handleNameSubmit() {
     const n = nameInput.trim();
