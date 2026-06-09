@@ -1,28 +1,26 @@
 import { useState, useEffect } from "react";
 
 const ANTHROPIC_API_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY;
-
-const STORAGE_KEY = "www_all_data";
+const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL;
+const SUPABASE_KEY = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
 const FALLBACK_QUESTIONS = [
   { topic: "Life", q: "You can only eat one cuisine for the rest of your life — but you live 20 extra years. Worth it?", a: "Absolutely worth it", b: "Hard pass, I'd rather die free" },
-  { topic: "Sports", q: "LeBron James gets a 5-year head start in his career — does he finish with more rings than Jordan?", a: "Yes, LeBron dominates", b: "No, Jordan still wins" },
-  { topic: "Absurd", q: "You wake up and every dog on Earth can talk, but they only say passive-aggressive comments. Good or bad world?", a: "I'd love this honestly", b: "Civilization collapses in a week" },
+  { topic: "Sports", q: "LeBron James gets a 5-year head start — does he finish with more rings than Jordan?", a: "Yes, LeBron dominates", b: "No, Jordan still wins" },
+  { topic: "Absurd", q: "Every dog on Earth can talk, but only says passive-aggressive comments. Good or bad world?", a: "I'd love this honestly", b: "Civilization collapses in a week" },
   { topic: "Pop Culture", q: "The MCU or Star Wars — one gets erased from history. Which survives?", a: "Save the MCU", b: "Save Star Wars" },
-  { topic: "Life", q: "Would you rather know the exact date you die, or never know but lose 10 years off your life?", a: "Know the date", b: "Stay ignorant, lose the years" },
+  { topic: "Life", q: "Would you rather know the exact date you die, or never know but lose 10 years?", a: "Know the date", b: "Stay ignorant, lose the years" },
   { topic: "Absurd", q: "Every time you lie, a nearby stranger gets $100. Do you become a serial liar?", a: "Yes, I'm doing this", b: "No, my integrity holds" },
-  { topic: "Sports", q: "Prime Tiger Woods or prime Jack Nicklaus — one round, winner take all at Augusta. Who wins?", a: "Tiger in his prime", b: "Jack Nicklaus, no question" },
-  { topic: "Pop Culture", q: "Taylor Swift and Beyoncé both release albums on the same day every year forever. Does either one win?", a: "Taylor eventually dominates", b: "Beyoncé, always and forever" },
+  { topic: "Sports", q: "Prime Tiger Woods or prime Jack Nicklaus — one round at Augusta. Who wins?", a: "Tiger in his prime", b: "Jack Nicklaus, no question" },
+  { topic: "Pop Culture", q: "Taylor Swift and Beyoncé release albums the same day every year forever. Does either win?", a: "Taylor eventually dominates", b: "Beyoncé, always and forever" },
 ];
 
 function getTodayKey() {
   return new Date().toISOString().split("T")[0];
 }
-
 function getInitials(name) {
   return name.trim().split(" ").map(n => n[0]).join("").toUpperCase().slice(0, 2);
 }
-
 const AVATAR_COLORS = ["#534AB7","#0F6E56","#993C1D","#993556","#185FA5","#3B6D11","#854F0B","#A32D2D"];
 function avatarColor(name) {
   let h = 0;
@@ -30,19 +28,61 @@ function avatarColor(name) {
   return AVATAR_COLORS[Math.abs(h) % AVATAR_COLORS.length];
 }
 
-// Shared state via localStorage (all friends on same device share via server — see README)
-function loadData() {
+async function sbFetch(path, opts = {}) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    ...opts,
+    headers: {
+      "apikey": SUPABASE_KEY,
+      "Authorization": `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      "Prefer": opts.prefer || "return=representation",
+      ...(opts.headers || {})
+    }
+  });
+  if (!res.ok) throw new Error(await res.text());
+  const text = await res.text();
+  return text ? JSON.parse(text) : [];
+}
+
+async function getTodayQuestion(today) {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? JSON.parse(raw) : { votes: {}, question: null, questionDate: null };
-  } catch { return { votes: {}, question: null, questionDate: null }; }
+    const rows = await sbFetch(`daily_question?date=eq.${today}&limit=1`);
+    if (rows.length > 0) return { topic: rows[0].topic, q: rows[0].question, a: rows[0].option_a, b: rows[0].option_b };
+  } catch {}
+  return null;
 }
 
-function saveData(data) {
-  try { localStorage.setItem(STORAGE_KEY, JSON.stringify(data)); } catch {}
+async function saveTodayQuestion(today, q) {
+  try {
+    await sbFetch("daily_question", {
+      method: "POST",
+      prefer: "return=minimal",
+      body: JSON.stringify({ date: today, topic: q.topic, question: q.q, option_a: q.a, option_b: q.b })
+    });
+  } catch {}
 }
 
-async function fetchQuestion() {
+async function getTodayVotes(today) {
+  try {
+    const rows = await sbFetch(`votes?date=eq.${today}`);
+    const v = {};
+    for (const r of rows) v[r.name] = r.choice;
+    return v;
+  } catch { return {}; }
+}
+
+async function submitVote(today, name, choice) {
+  try {
+    await sbFetch("votes", {
+      method: "POST",
+      prefer: "resolution=merge-duplicates,return=minimal",
+      headers: { "Prefer": "resolution=merge-duplicates,return=minimal" },
+      body: JSON.stringify({ date: today, name, choice })
+    });
+  } catch {}
+}
+
+async function fetchAIQuestion() {
   if (!ANTHROPIC_API_KEY) return null;
   const topics = ["Sports", "Life & Philosophy", "Pop Culture", "Random & Absurd"];
   const topic = topics[Math.floor(Math.random() * topics.length)];
@@ -50,7 +90,6 @@ async function fetchQuestion() {
 Format your response as JSON only (no markdown, no preamble):
 {"topic":"${topic}","q":"the question text","a":"first option (bold stance)","b":"second option (opposite bold stance)"}
 Make it spicy, polarizing, and fun. Both options should be defensible but create strong disagreement.`;
-
   try {
     const res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -60,16 +99,11 @@ Make it spicy, polarizing, and fun. Both options should be defensible but create
         "anthropic-version": "2023-06-01",
         "anthropic-dangerous-direct-browser-access": "true"
       },
-      body: JSON.stringify({
-        model: "claude-sonnet-4-20250514",
-        max_tokens: 1000,
-        messages: [{ role: "user", content: prompt }]
-      })
+      body: JSON.stringify({ model: "claude-sonnet-4-20250514", max_tokens: 1000, messages: [{ role: "user", content: prompt }] })
     });
     const data = await res.json();
     const text = data.content?.find(b => b.type === "text")?.text || "";
-    const clean = text.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(clean);
+    const parsed = JSON.parse(text.replace(/```json|```/g, "").trim());
     if (parsed.q && parsed.a && parsed.b) return parsed;
   } catch {}
   return null;
@@ -90,17 +124,17 @@ export default function App() {
   async function initApp() {
     setLoading(true);
     const today = getTodayKey();
-    const data = loadData();
-    const todayVotes = data.votes[today] || {};
+
+    // Load votes from Supabase
+    const todayVotes = await getTodayVotes(today);
     setVotes(todayVotes);
 
-    let q = null;
-    if (data.questionDate === today && data.question) {
-      q = data.question;
-    } else {
-      q = await fetchQuestion();
+    // Load or generate today's shared question
+    let q = await getTodayQuestion(today);
+    if (!q) {
+      q = await fetchAIQuestion();
       if (!q) q = FALLBACK_QUESTIONS[Math.floor(Math.random() * FALLBACK_QUESTIONS.length)];
-      saveData({ ...data, question: q, questionDate: today });
+      await saveTodayQuestion(today, q);
     }
     setQuestion(q);
     setLoading(false);
@@ -110,20 +144,16 @@ export default function App() {
     const n = nameInput.trim();
     if (!n) return;
     setName(n);
-    const today = getTodayKey();
-    const data = loadData();
-    const v = (data.votes[today] || {})[n];
+    const v = votes[n];
     if (v) { setMyVote(v); setScreen("results"); }
     else setScreen("vote");
   }
 
-  function handleVote(choice) {
+  async function handleVote(choice) {
     const today = getTodayKey();
-    const data = loadData();
-    const todayVotes = { ...(data.votes[today] || {}), [name]: choice };
-    const newVotes = { ...data.votes, [today]: todayVotes };
-    saveData({ ...data, votes: newVotes });
-    setVotes(todayVotes);
+    await submitVote(today, name, choice);
+    const updated = await getTodayVotes(today);
+    setVotes(updated);
     setMyVote(choice);
     setShowEasterEgg(true);
     setTimeout(() => { setShowEasterEgg(false); setScreen("results"); }, 1000);
@@ -138,17 +168,15 @@ export default function App() {
 
   return (
     <div style={{ width: "100%", maxWidth: 600, position: "relative" }}>
-
       {showEasterEgg && (
         <div style={{position:"fixed",top:"50%",left:"50%",transform:"translate(-50%,-50%)",zIndex:1000,background:"rgba(255,255,255,0.97)",borderRadius:16,padding:"1rem 2rem",boxShadow:"0 0 0 3px rgba(83,74,183,0.4)",textAlign:"center",animation:"popIn 0.2s ease",whiteSpace:"nowrap"}}>
           <span style={{fontSize:22}}>😢</span>
           <p style={{fontSize:17,fontWeight:600,margin:"6px 0 0",color:"#2d1b69"}}>I miss Jack</p>
         </div>
       )}
-
       <style>{`
         @keyframes spin { to { transform: rotate(360deg) } }
-        @keyframes popIn { from { transform: translate(-50%,-50%) scale(0.6); opacity: 0 } to { transform: translate(-50%,-50%) scale(1); opacity: 1 } }
+        @keyframes popIn { from { transform: translate(-50%,-50%) scale(0.6); opacity:0 } to { transform: translate(-50%,-50%) scale(1); opacity:1 } }
         .vote-btn { transition: transform 0.1s, box-shadow 0.1s; cursor: pointer; border: none; }
         .vote-btn:hover { transform: translateY(-3px) scale(1.02); }
         .vote-btn:active { transform: scale(0.97); }
@@ -157,7 +185,6 @@ export default function App() {
       `}</style>
 
       <div style={{background:"rgba(255,255,255,0.06)",backdropFilter:"blur(12px)",border:"0.5px solid rgba(255,255,255,0.15)",borderRadius:20,padding:"2rem 1.5rem",position:"relative",overflow:"hidden"}}>
-
         <div style={{position:"absolute",top:-60,right:-60,width:220,height:220,borderRadius:"50%",background:"rgba(83,74,183,0.2)",pointerEvents:"none"}} />
         <div style={{position:"absolute",bottom:-40,left:-40,width:180,height:180,borderRadius:"50%",background:"rgba(15,110,86,0.15)",pointerEvents:"none"}} />
 
@@ -181,7 +208,6 @@ export default function App() {
                   </span>
                 </div>
               )}
-
               {question && (
                 <div style={{background:"rgba(255,255,255,0.08)",border:"0.5px solid rgba(255,255,255,0.15)",borderRadius:14,padding:"1.25rem",marginBottom:"1.5rem",textAlign:"center"}}>
                   <p style={{fontSize:17,fontWeight:500,lineHeight:1.6,margin:0,color:"#fff"}}>{question.q}</p>
